@@ -1,0 +1,40 @@
+# Place this file at: .github/workflows/scan.yml in a GitHub repo
+# containing scan_swing_trades.py. GitHub will run it daily for free
+# (public repos get free Actions minutes) and commit the results CSV
+# back to the repo, so you can check it from your phone every morning.
+#
+# To also get emailed results, add a step using an action like
+# dawidd6/action-send-mail with SMTP secrets configured in repo settings.
+
+name: Daily Swing Trade Scan
+
+on:
+  schedule:
+    # 10:45 UTC = 16:15 IST, ~15 min after NSE close (15:30 IST)
+    - cron: '45 10 * * 1-5'
+  workflow_dispatch: {}   # allows manual "Run workflow" button too
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install yfinance pandas numpy requests
+
+      - name: Run scanner
+        run: python scan_swing_trades.py --top 5
+
+      - name: Commit results
+        run: |
+          git config user.name "swing-scanner-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add scan_results_*.csv
+          git commit -m "Daily swing scan $(date +'%Y-%m-%d')" || echo "No changes to commit"
+          git push
