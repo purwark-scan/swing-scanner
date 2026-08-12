@@ -15,7 +15,13 @@ Splits results into F&O and Non-F&O buckets and prints/saves the
 top N candidates from each, ranked by a composite momentum score.
 
 REQUIREMENTS
-    pip install yfinance pandas numpy --break-system-packages
+    pip install yfinance pandas numpy curl_cffi --break-system-packages
+
+IMPORTANT — Yahoo Finance blocks cloud/datacenter IPs (GitHub Actions runners,
+AWS, etc.) as of mid-2024. This script routes yfinance through curl_cffi with
+a browser TLS fingerprint to work around that. If you still see every symbol
+fail with empty data, Yahoo's blocklist has likely updated again — check for
+a newer yfinance release or an alternate data source (e.g. nsepython).
 
 USAGE
     python scan_swing_trades.py                 # scan full Nifty 500
@@ -57,6 +63,21 @@ import pandas as pd
 import requests
 
 warnings.filterwarnings("ignore")
+
+def _make_yf_session():
+    """Yahoo Finance blocks plain requests from cloud/datacenter IPs
+    (GitHub Actions, AWS, etc.) since mid-2024. curl_cffi impersonates a
+    real browser's TLS fingerprint, which routes around that block."""
+    try:
+        from curl_cffi import requests as cffi_requests
+        return cffi_requests.Session(impersonate="chrome")
+    except ImportError:
+        print("WARNING: curl_cffi not installed -- falling back to plain "
+              "requests. If running on a cloud runner (GitHub Actions etc.), "
+              "this will likely get blocked by Yahoo. Run: pip install curl_cffi")
+        return None
+
+YF_SESSION = _make_yf_session()
 
 NIFTY500_URL = "https://archives.nseindia.com/content/indices/ind_nifty500list.csv"
 FNO_URL = "https://archives.nseindia.com/content/fo/fo_mktlots.csv"
@@ -227,15 +248,29 @@ def run_scan(symbols, fno_set, top_n, limit=None):
         symbols = symbols[:limit]
 
     print(f"Downloading NIFTY 50 index data for RS calc...")
-    nifty = yf.download("^NSEI", period="2y", progress=False, auto_adjust=True)
+    nifty = yf.download("^NSEI", period="2y", progress=False, auto_adjust=True,
+                         session=YF_SESSION)
+    if nifty.empty:
+        raise RuntimeError(
+            "Yahoo Finance returned no data even for ^NSEI. This almost "
+            "always means Yahoo is blocking this server's IP. Confirm "
+            "curl_cffi is installed and try again; if it still fails, "
+            "Yahoo's blocklist may have changed and a different data "
+            "source (e.g. nsepython) is needed."
+        )
     nifty_close = nifty["Close"]
+    if isinstance(nifty_close, pd.DataFrame):
+        nifty_close = nifty_close.iloc[:, 0]
 
     results = []
     failed = []
     for i, sym in enumerate(symbols):
         ticker = f"{sym}.NS"
         try:
-            data = yf.download(ticker, period="2y", progress=False, auto_adjust=True)
+            data = yf.download(ticker, period="2y", progress=False, auto_adjust=True,
+                                session=YF_SESSION)
+            if isinstance(data.columns, pd.MultiIndex):
+                data.columns = data.columns.get_level_values(0)
             if data.empty or len(data) < 210:
                 failed.append(sym)
                 continue
