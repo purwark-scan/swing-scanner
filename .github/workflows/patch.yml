@@ -17,6 +17,8 @@ on:
 jobs:
   scan:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -26,7 +28,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install yfinance pandas numpy requests
+        run: pip install yfinance pandas numpy requests curl_cffi
 
       - name: Run scanner
         run: python scan_swing_trades.py --top 5
