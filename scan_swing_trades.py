@@ -307,7 +307,20 @@ def run_scan(symbols, fno_set, top_n, limit=None):
     fno_picks = qualified[qualified["is_fno"]].head(top_n)
     non_fno_picks = qualified[~qualified["is_fno"]].head(top_n)
 
-    return df, fno_picks, non_fno_picks
+    # Near-misses: best-scoring stocks that didn't fully qualify, so you
+    # always have visibility into "closest to a setup" even on quiet days.
+    near_miss = df[~df["qualifies"]].sort_values("score", ascending=False)
+    near_miss_fno = near_miss[near_miss["is_fno"]].head(top_n)
+    near_miss_non_fno = near_miss[~near_miss["is_fno"]].head(top_n)
+
+    # Rule-level pass-rate across the whole scanned universe, so you can see
+    # WHICH rule is the bottleneck on a zero-result day (e.g. "near_52w_high"
+    # passing on only 4% of stocks tells you the market is in a pullback).
+    rule_names = list(df["rules_detail"].iloc[0].keys())
+    pass_rates = {r: round(df["rules_detail"].apply(lambda d: d[r]).mean() * 100, 1)
+                  for r in rule_names}
+
+    return df, fno_picks, non_fno_picks, near_miss_fno, near_miss_non_fno, pass_rates
 
 
 def main():
@@ -320,25 +333,43 @@ def main():
     symbols = get_nifty500_symbols()
     fno_set = get_fno_symbols()
 
-    full_df, fno_picks, non_fno_picks = run_scan(symbols, fno_set, args.top, args.limit)
+    full_df, fno_picks, non_fno_picks, near_miss_fno, near_miss_non_fno, pass_rates = \
+        run_scan(symbols, fno_set, args.top, args.limit)
 
     out_file = f"scan_results_{datetime.now().strftime('%Y%m%d')}.csv"
     full_df.drop(columns=["rules_detail"]).to_csv(out_file, index=False)
     print(f"\nFull results saved to {out_file}\n")
 
-    print(f"--- TOP {args.top} F&O SWING CANDIDATES ---")
+    print("--- RULE PASS-RATE ACROSS SCANNED UNIVERSE (diagnostic) ---")
+    for rule, pct in pass_rates.items():
+        print(f"  {rule:30s} {pct:5.1f}% of stocks pass")
+    print()
+
+    cols = ["symbol", "close", "pct_from_52w_high", "rs_vs_nifty_pct", "rules_passed", "score"]
+
+    print(f"--- TOP {args.top} F&O SWING CANDIDATES (fully qualified) ---")
     if fno_picks.empty:
         print("  None qualified today.")
     else:
-        print(fno_picks[["symbol", "close", "pct_from_52w_high", "rs_vs_nifty_pct", "rules_passed", "score"]]
-              .to_string(index=False))
+        print(fno_picks[cols].to_string(index=False))
 
-    print(f"\n--- TOP {args.top} NON-F&O SWING CANDIDATES ---")
+    print(f"\n--- TOP {args.top} NON-F&O SWING CANDIDATES (fully qualified) ---")
     if non_fno_picks.empty:
         print("  None qualified today.")
     else:
-        print(non_fno_picks[["symbol", "close", "pct_from_52w_high", "rs_vs_nifty_pct", "rules_passed", "score"]]
-              .to_string(index=False))
+        print(non_fno_picks[cols].to_string(index=False))
+
+    print(f"\n--- CLOSEST F&O NEAR-MISSES (didn't fully qualify, but ranked) ---")
+    if near_miss_fno.empty:
+        print("  (no scored F&O stocks)")
+    else:
+        print(near_miss_fno[cols].to_string(index=False))
+
+    print(f"\n--- CLOSEST NON-F&O NEAR-MISSES (didn't fully qualify, but ranked) ---")
+    if near_miss_non_fno.empty:
+        print("  (no scored non-F&O stocks)")
+    else:
+        print(near_miss_non_fno[cols].to_string(index=False))
 
 
 if __name__ == "__main__":
