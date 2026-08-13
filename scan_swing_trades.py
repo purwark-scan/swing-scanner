@@ -124,14 +124,67 @@ def get_nifty500_symbols():
         return FALLBACK_FNO_LIST
 
 
+# NSE's fo_mktlots.csv has a RAGGED number of columns per row (each expiry
+# month adds a trailing lot-size column), which breaks pandas' strict C
+# parser ("Expected N fields, saw M"). Python's csv module tolerates ragged
+# rows natively, so we use that instead of pandas here.
+_FNO_JUNK_TOKENS = {
+    "", "SR", "NO", "SR.NO.", "SR NO", "UNDERLYING", "SYMBOL",
+    "UNDERLYING SYMBOL", "MARKET", "LOT", "MARKET LOT", "NAN",
+}
+_SYMBOL_RE = __import__("re").compile(r"^[A-Z][A-Z0-9&\-]{0,19}$")
+
+
 def get_fno_symbols():
+    import csv
+    import re
+
     try:
-        syms = fetch_csv(FNO_URL, ["SYMBOL", "Symbol"])
-        syms = [s for s in syms if s.isupper() and s.isalnum() is False or s.isalpha()]
-        print(f"Fetched {len(syms)} F&O symbols from NSE.")
-        return set(syms)
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(FNO_URL, headers=headers, timeout=15)
+        r.raise_for_status()
+        rows = list(csv.reader(io.StringIO(r.text)))
+
+        # Find the header row and the column index that holds the symbol.
+        symbol_col = None
+        for row in rows[:10]:
+            for idx, cell in enumerate(row):
+                if "SYMBOL" in cell.strip().upper():
+                    symbol_col = idx
+                    break
+            if symbol_col is not None:
+                break
+
+        if symbol_col is None:
+            raise ValueError("Could not locate a SYMBOL column in fo_mktlots.csv header")
+
+        symbols = set()
+        month_re = re.compile(r"^(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)$")
+        for row in rows:
+            if len(row) <= symbol_col:
+                continue
+            token = row[symbol_col].strip().upper()
+            if (token in _FNO_JUNK_TOKENS
+                    or not _SYMBOL_RE.match(token)
+                    or month_re.match(token)
+                    or token.isdigit()):
+                continue
+            symbols.add(token)
+
+        if len(symbols) < 50:
+            # Sanity check: NSE's F&O list has ~180+ names. If we parsed
+            # fewer than 50, something's still wrong with column detection
+            # rather than this being a genuinely short list.
+            raise ValueError(f"Only parsed {len(symbols)} symbols -- "
+                              f"looks like a parsing failure, not real data")
+
+        print(f"Fetched {len(symbols)} F&O symbols from NSE.")
+        return symbols
     except Exception as e:
-        print(f"WARNING: could not fetch F&O list live ({e}). Using static fallback.")
+        print(f"WARNING: could not fetch F&O list live ({e}). Using static fallback "
+              f"({len(FALLBACK_FNO_LIST)} symbols -- much smaller than the real "
+              f"~180+ F&O universe, so the F&O/Non-F&O split will be less accurate "
+              f"this run).")
         return set(FALLBACK_FNO_LIST)
 
 
