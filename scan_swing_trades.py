@@ -143,7 +143,11 @@ def get_fno_symbols():
         headers = {"User-Agent": "Mozilla/5.0"}
         r = requests.get(FNO_URL, headers=headers, timeout=15)
         r.raise_for_status()
-        rows = list(csv.reader(io.StringIO(r.text)))
+        # Normalize line endings before csv.reader sees the text -- NSE's
+        # file mixes \r\n / \r / \n in a way that confuses csv module's
+        # unquoted-field newline detection otherwise.
+        normalized_text = r.text.replace("\r\n", "\n").replace("\r", "\n")
+        rows = list(csv.reader(io.StringIO(normalized_text, newline="")))
 
         # Find the header row and the column index that holds the symbol.
         symbol_col = None
